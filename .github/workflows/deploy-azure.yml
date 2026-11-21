@@ -1,0 +1,92 @@
+name: Deploy SimFleet to Azure
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      POSTGRES_NAME: ${{ vars.POSTGRES_NAME }}
+      LOCATION: ${{ vars.AZURE_LOCATION || 'eastus' }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create resource group
+        run: az group create --name "$AZURE_RESOURCE_GROUP" --location "$LOCATION"
+
+      - name: Provision Azure infrastructure
+        id: infra
+        shell: bash
+        run: |
+          az deployment group create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file infra/azure/container-apps.bicep \
+            --parameters acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" \
+            --query properties.outputs -o json > outputs.json
+          cat outputs.json
+
+      - name: Build and push API
+        run: az acr build --registry "$ACR_NAME" --image "simfleet-api:${GITHUB_SHA}" --file pipeline/Dockerfile.api .
+
+      - name: Build and push worker
+        run: az acr build --registry "$ACR_NAME" --image "simfleet-worker:${GITHUB_SHA}" --file pipeline/Dockerfile.worker .
+
+      - name: Read provisioned URLs
+        id: urls
+        shell: bash
+        run: |
+          API_URL=$(jq -r '.apiUrl.value' outputs.json)
+          DASHBOARD_URL=$(jq -r '.dashboardUrl.value' outputs.json)
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+          echo "dashboard_url=$DASHBOARD_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push dashboard
+        run: |
+          az acr build --registry "$ACR_NAME" --image "simfleet-dashboard:${GITHUB_SHA}" \
+            --build-arg "VITE_API_URL=${{ steps.urls.outputs.api_url }}" \
+            --file frontend/Dockerfile frontend
+
+      - name: Deploy application images
+        shell: bash
+        run: |
+          ACR_SERVER=$(jq -r '.acrLoginServer.value' outputs.json)
+          az deployment group create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file infra/azure/container-apps.bicep \
+            --parameters acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" \
+              apiImage="$ACR_SERVER/simfleet-api:${GITHUB_SHA}" \
+              workerImage="$ACR_SERVER/simfleet-worker:${GITHUB_SHA}" \
+              dashboardImage="$ACR_SERVER/simfleet-dashboard:${GITHUB_SHA}" \
+              dashboardUrl="${{ steps.urls.outputs.dashboard_url }}"
+
+      - name: Initialize PostgreSQL schema and demo data
+        shell: bash
+        run: |
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y postgresql-client >/dev/null
+          export PGPASSWORD="$POSTGRES_PASSWORD"
+          POSTGRES_HOST="$POSTGRES_NAME.postgres.database.azure.com"
+          psql "host=${POSTGRES_HOST} port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f db/schema.sql
+          psql "host=${POSTGRES_HOST} port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f db/seed/demo.sql
+
+      - name: Print deployment URLs
+        run: |
+          echo "API: ${{ steps.urls.outputs.api_url }}"
+          echo "Dashboard: ${{ steps.urls.outputs.dashboard_url }}"

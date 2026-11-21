@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: simfleet
+      POSTGRES_USER: simfleet
+      POSTGRES_PASSWORD: simfleet
+    ports:
+      - "55432:5432"
+    volumes:
+      - simfleet-data:/var/lib/postgresql/data
+      - ../db/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+      - ../db/views.sql:/docker-entrypoint-initdb.d/002-views.sql:ro
+      - ../db/seed/demo.sql:/docker-entrypoint-initdb.d/003-demo.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U simfleet -d simfleet"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  api:
+    build:
+      context: ..
+      dockerfile: pipeline/Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql://simfleet:simfleet@db:5432/simfleet
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+  worker:
+    build:
+      context: ..
+      dockerfile: pipeline/Dockerfile.worker
+    environment:
+      DATABASE_URL: postgresql://simfleet:simfleet@db:5432/simfleet
+      SIMFLEET_ENGINE: ${SIMFLEET_ENGINE:-demo}
+    profiles: ["jobs"]
+    depends_on:
+      db:
+        condition: service_healthy
+  dashboard:
+    build:
+      context: ../frontend
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+volumes:
+  simfleet-data:

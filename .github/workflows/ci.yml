@@ -1,0 +1,68 @@
+name: SimFleet CI
+
+permissions:
+  contents: read
+  pull-requests: write
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: simfleet
+          POSTGRES_USER: simfleet
+          POSTGRES_PASSWORD: simfleet
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U simfleet -d simfleet"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: psql postgresql://simfleet:simfleet@localhost:5432/simfleet -f db/schema.sql
+      - name: Run PR smoke suite
+        if: github.event_name == 'pull_request'
+        run: pytest pipeline/tests/test_regression_query.py pipeline/tests/test_flaky_detection.py pipeline/tests/test_sql_fixtures.py -q
+        env:
+          DATABASE_URL: postgresql://simfleet:simfleet@localhost:5432/simfleet
+      - name: Run full suite
+        if: github.event_name != 'pull_request'
+        run: pytest pipeline/tests -q
+        env:
+          DATABASE_URL: postgresql://simfleet:simfleet@localhost:5432/simfleet
+      - name: Build pass-rate summary
+        if: github.event_name == 'pull_request'
+        env:
+          DATABASE_URL: postgresql://simfleet:simfleet@localhost:5432/simfleet
+        run: |
+          psql "$DATABASE_URL" -Atc "SELECT r.driver_version || ' | ' || s.category || ' | ' || round(count(*) FILTER (WHERE v.passed)::numeric / count(*), 4) FROM runs r JOIN verdicts v USING (run_id) JOIN variations va USING (variation_id) JOIN scenarios s USING (scenario_id) GROUP BY r.driver_version, s.category ORDER BY r.driver_version, s.category" > pass-rate-summary.txt
+      - name: Comment pass-rate summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('pass-rate-summary.txt', 'utf8').trim();
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## SimFleet pass-rate smoke summary\n\n\`\`\`text\n${summary || 'No runs recorded'}\n\`\`\``
+            });
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install && npm run build
+        working-directory: frontend

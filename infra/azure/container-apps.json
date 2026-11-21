@@ -1,0 +1,353 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.49.2.45890",
+      "templateHash": "7632629612642880092"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "acrName": {
+      "type": "string"
+    },
+    "postgresAdminUser": {
+      "type": "string",
+      "defaultValue": "simfleet"
+    },
+    "postgresPassword": {
+      "type": "securestring"
+    },
+    "postgresName": {
+      "type": "string"
+    },
+    "apiImage": {
+      "type": "string",
+      "defaultValue": "mcr.microsoft.com/appsvc/staticsite:latest"
+    },
+    "workerImage": {
+      "type": "string",
+      "defaultValue": "mcr.microsoft.com/azure-cli:latest"
+    },
+    "dashboardImage": {
+      "type": "string",
+      "defaultValue": "nginx:1.27-alpine"
+    },
+    "dashboardUrl": {
+      "type": "string",
+      "defaultValue": "http://localhost:5173"
+    },
+    "workerScheduleCron": {
+      "type": "string",
+      "defaultValue": "0 2 * * *"
+    }
+  },
+  "variables": {
+    "postgresDatabaseName": "simfleet",
+    "acrPullRoleId": "7f951dda-4ed3-4680-a7ca-43fe172d538d",
+    "databaseUrl": "[format('postgresql://{0}:{1}@{2}.postgres.database.azure.com:5432/{3}?sslmode=require', parameters('postgresAdminUser'), parameters('postgresPassword'), parameters('postgresName'), variables('postgresDatabaseName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "[parameters('acrName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Basic"
+      },
+      "properties": {
+        "adminUserEnabled": false
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+      "apiVersion": "2024-08-01",
+      "name": "[parameters('postgresName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard_B1ms",
+        "tier": "Burstable"
+      },
+      "properties": {
+        "administratorLogin": "[parameters('postgresAdminUser')]",
+        "administratorLoginPassword": "[parameters('postgresPassword')]",
+        "version": "16",
+        "storage": {
+          "storageSizeGB": 32
+        },
+        "authConfig": {
+          "activeDirectoryAuth": "Disabled",
+          "passwordAuth": "Enabled"
+        },
+        "backup": {
+          "backupRetentionDays": 7,
+          "geoRedundantBackup": "Disabled"
+        },
+        "highAvailability": {
+          "mode": "Disabled"
+        },
+        "network": {
+          "publicNetworkAccess": "Enabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', parameters('postgresName'), variables('postgresDatabaseName'))]",
+      "properties": {
+        "charset": "UTF8",
+        "collation": "en_US.utf8"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('postgresName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', parameters('postgresName'), 'allow-deployment-source')]",
+      "properties": {
+        "startIpAddress": "0.0.0.0",
+        "endIpAddress": "255.255.255.255"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('postgresName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-10-02-preview",
+      "name": "simfleet-env",
+      "location": "[parameters('location')]",
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-10-02-preview",
+      "name": "simfleet-api",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', 'simfleet-env')]",
+        "configuration": {
+          "ingress": {
+            "external": true,
+            "targetPort": 8000,
+            "transport": "http"
+          },
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').loginServer]",
+              "identity": "system-enforced"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "api",
+              "image": "[parameters('apiImage')]",
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              },
+              "env": [
+                {
+                  "name": "DATABASE_URL",
+                  "value": "[variables('databaseUrl')]"
+                },
+                {
+                  "name": "CORS_ORIGINS",
+                  "value": "[parameters('dashboardUrl')]"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 3
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', 'simfleet-env')]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/jobs",
+      "apiVersion": "2024-10-02-preview",
+      "name": "simfleet-worker",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', 'simfleet-env')]",
+        "configuration": {
+          "triggerType": "Schedule",
+          "scheduleTriggerConfig": {
+            "cronExpression": "[parameters('workerScheduleCron')]",
+            "parallelism": 20,
+            "replicaCompletionCount": 1
+          },
+          "replicaTimeout": 900,
+          "replicaRetryLimit": 3,
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').loginServer]",
+              "identity": "system-enforced"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "worker",
+              "image": "[parameters('workerImage')]",
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              },
+              "env": [
+                {
+                  "name": "DATABASE_URL",
+                  "value": "[variables('databaseUrl')]"
+                },
+                {
+                  "name": "SIMFLEET_ENGINE",
+                  "value": "demo"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', 'simfleet-env')]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-10-02-preview",
+      "name": "simfleet-dashboard",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', 'simfleet-env')]",
+        "configuration": {
+          "ingress": {
+            "external": true,
+            "targetPort": 80,
+            "transport": "http"
+          },
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').loginServer]",
+              "identity": "system-enforced"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "dashboard",
+              "image": "[parameters('dashboardImage')]",
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 2
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', 'simfleet-env')]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+      "name": "[guid(resourceGroup().id, resourceId('Microsoft.App/containerApps', 'simfleet-api'), variables('acrPullRoleId'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', 'simfleet-api'), '2024-10-02-preview', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPullRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/containerApps', 'simfleet-api')]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+      "name": "[guid(resourceGroup().id, resourceId('Microsoft.App/jobs', 'simfleet-worker'), variables('acrPullRoleId'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.App/jobs', 'simfleet-worker'), '2024-10-02-preview', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPullRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+        "[resourceId('Microsoft.App/jobs', 'simfleet-worker')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+      "name": "[guid(resourceGroup().id, resourceId('Microsoft.App/containerApps', 'simfleet-dashboard'), variables('acrPullRoleId'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', 'simfleet-dashboard'), '2024-10-02-preview', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPullRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/containerApps', 'simfleet-dashboard')]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "acrLoginServer": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), '2023-07-01').loginServer]"
+    },
+    "apiUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', 'simfleet-api'), '2024-10-02-preview').configuration.ingress.fqdn)]"
+    },
+    "dashboardUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', 'simfleet-dashboard'), '2024-10-02-preview').configuration.ingress.fqdn)]"
+    },
+    "postgresHost": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('postgresName')), '2024-08-01').fullyQualifiedDomainName]"
+    },
+    "postgresDatabase": {
+      "type": "string",
+      "value": "[variables('postgresDatabaseName')]"
+    }
+  }
+}

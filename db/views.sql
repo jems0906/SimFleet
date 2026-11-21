@@ -1,0 +1,2 @@
+-- Query files under db/queries are parameterized analytics contracts rather than views.
+-- Keeping date/version filters explicit ensures each API summary can report its exact window.
