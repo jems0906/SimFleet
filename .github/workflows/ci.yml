@@ -42,6 +42,11 @@ jobs:
         run: pytest pipeline/tests -q
         env:
           DATABASE_URL: postgresql://simfleet:simfleet@localhost:5432/simfleet
+      - name: Seed pass-rate smoke data
+        if: github.event_name == 'pull_request'
+        env:
+          DATABASE_URL: postgresql://simfleet:simfleet@localhost:5432/simfleet
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seed/demo.sql
       - name: Build pass-rate summary
         if: github.event_name == 'pull_request'
         env:

@@ -4,6 +4,7 @@ import pytest
 
 from pipeline.tests.conftest import add_run
 from pipeline.generate_batches import VariationPolicy, create_batch, generate_variations
+from pipeline.worker.main import select_pending_batch
 from pipeline.worker.runner import DemoRunner, RunResult
 from pipeline.worker.writer import execute_batch, persist_result
 
@@ -42,3 +43,31 @@ def test_worker_death_preserves_progress_and_retry_runs_only_missing(db):
     result = execute_batch(conn, batch_id, DemoRunner())
     assert result["status"] == "complete"
     assert result["processed"] == 2
+
+
+def test_worker_claims_oldest_incomplete_batch(db):
+    conn, scenarios = db
+    old_batch = create_batch(conn, scenarios["merge-a"], "v1", 500, 2, VariationPolicy())
+    new_batch = create_batch(conn, scenarios["merge-a"], "v1", 600, 2, VariationPolicy())
+    conn.execute(
+        "UPDATE run_batches SET created_at = now() - interval '10 minutes' WHERE batch_id = %s",
+        (old_batch,),
+    )
+    conn.execute(
+        "UPDATE run_batches SET created_at = now() - interval '5 minutes' WHERE batch_id = %s",
+        (new_batch,),
+    )
+
+    assert select_pending_batch(conn) == old_batch
+
+    conn.execute(
+        "UPDATE batch_variations SET status = 'complete', completed_at = now() WHERE batch_id = %s",
+        (old_batch,),
+    )
+    assert select_pending_batch(conn) == new_batch
+
+    conn.execute(
+        "UPDATE batch_variations SET status = 'complete', completed_at = now() WHERE batch_id = %s",
+        (new_batch,),
+    )
+    assert select_pending_batch(conn) is None
