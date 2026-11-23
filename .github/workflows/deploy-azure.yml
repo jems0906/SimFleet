@@ -25,32 +25,30 @@ jobs:
       - name: Validate Azure deployment settings
         shell: bash
         env:
-          AZURE_CLIENT_ID_SET: ${{ secrets.AZURE_CLIENT_ID != '' }}
-          AZURE_TENANT_ID_SET: ${{ secrets.AZURE_TENANT_ID != '' }}
-          AZURE_SUBSCRIPTION_ID_SET: ${{ secrets.AZURE_SUBSCRIPTION_ID != '' }}
-          POSTGRES_PASSWORD_SET: ${{ secrets.POSTGRES_PASSWORD != '' }}
-          AZURE_RESOURCE_GROUP_SET: ${{ vars.AZURE_RESOURCE_GROUP != '' }}
-          ACR_NAME_SET: ${{ vars.ACR_NAME != '' }}
-          POSTGRES_NAME_SET: ${{ vars.POSTGRES_NAME != '' }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          POSTGRES_NAME: ${{ vars.POSTGRES_NAME }}
         run: |
           missing=0
-          for setting in \
-            "AZURE_CLIENT_ID:$AZURE_CLIENT_ID_SET" \
-            "AZURE_TENANT_ID:$AZURE_TENANT_ID_SET" \
-            "AZURE_SUBSCRIPTION_ID:$AZURE_SUBSCRIPTION_ID_SET" \
-            "POSTGRES_PASSWORD:$POSTGRES_PASSWORD_SET" \
-            "AZURE_RESOURCE_GROUP:$AZURE_RESOURCE_GROUP_SET" \
-            "ACR_NAME:$ACR_NAME_SET" \
-            "POSTGRES_NAME:$POSTGRES_NAME_SET"; do
-            name=${setting%%:*}
-            value=${setting#*:}
-            if [ "$value" != "true" ]; then
-              echo "Missing GitHub setting: $name"
+          check_setting() {
+            if [ -z "${2}" ]; then
+              echo "Missing GitHub setting: $1"
               missing=1
             fi
-          done
+          }
+          check_setting AZURE_CLIENT_ID "$AZURE_CLIENT_ID"
+          check_setting AZURE_TENANT_ID "$AZURE_TENANT_ID"
+          check_setting AZURE_SUBSCRIPTION_ID "$AZURE_SUBSCRIPTION_ID"
+          check_setting POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+          check_setting AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
+          check_setting ACR_NAME "$ACR_NAME"
+          check_setting POSTGRES_NAME "$POSTGRES_NAME"
           if [ "$missing" -ne 0 ]; then
-            echo "Configure repository/environment variables and secrets before rerunning deploy."
+            echo "Configure the missing repository/environment settings before rerunning deploy."
             exit 1
           fi
 
