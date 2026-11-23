@@ -22,6 +22,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate Azure deployment settings
+        shell: bash
+        env:
+          AZURE_CLIENT_ID_SET: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          AZURE_TENANT_ID_SET: ${{ secrets.AZURE_TENANT_ID != '' }}
+          AZURE_SUBSCRIPTION_ID_SET: ${{ secrets.AZURE_SUBSCRIPTION_ID != '' }}
+          POSTGRES_PASSWORD_SET: ${{ secrets.POSTGRES_PASSWORD != '' }}
+          AZURE_RESOURCE_GROUP_SET: ${{ vars.AZURE_RESOURCE_GROUP != '' }}
+          ACR_NAME_SET: ${{ vars.ACR_NAME != '' }}
+          POSTGRES_NAME_SET: ${{ vars.POSTGRES_NAME != '' }}
+        run: |
+          missing=0
+          for setting in \
+            "AZURE_CLIENT_ID:$AZURE_CLIENT_ID_SET" \
+            "AZURE_TENANT_ID:$AZURE_TENANT_ID_SET" \
+            "AZURE_SUBSCRIPTION_ID:$AZURE_SUBSCRIPTION_ID_SET" \
+            "POSTGRES_PASSWORD:$POSTGRES_PASSWORD_SET" \
+            "AZURE_RESOURCE_GROUP:$AZURE_RESOURCE_GROUP_SET" \
+            "ACR_NAME:$ACR_NAME_SET" \
+            "POSTGRES_NAME:$POSTGRES_NAME_SET"; do
+            name=${setting%%:*}
+            value=${setting#*:}
+            if [ "$value" != "true" ]; then
+              echo "Missing GitHub setting: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Configure repository/environment variables and secrets before rerunning deploy."
+            exit 1
+          fi
+
       - uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
