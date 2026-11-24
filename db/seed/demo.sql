@@ -59,6 +59,7 @@ DECLARE
   v_metric double precision;
   v_version text;
 BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('simfleet-demo-seed'));
   FOREACH v_version IN ARRAY ARRAY['v1', 'v2'] LOOP
     FOR v_scenario IN SELECT * FROM scenarios LOOP
       v_batch := NULL;
@@ -121,6 +122,7 @@ DECLARE
   v_batch uuid;
   v_run bigint;
 BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('simfleet-demo-seed'));
   SELECT scenario_id INTO v_scenario_id
   FROM scenarios WHERE name = 'urban_merge_01' LIMIT 1;
 
