@@ -82,6 +82,18 @@ CREATE TABLE IF NOT EXISTS verdicts (
 ALTER TABLE run_batches ADD COLUMN IF NOT EXISTS suite_id bigint REFERENCES suites(suite_id);
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS suite_id bigint REFERENCES suites(suite_id);
 
+CREATE TABLE IF NOT EXISTS api_audit (
+    audit_id bigserial PRIMARY KEY,
+    principal text NOT NULL,
+    method text NOT NULL,
+    path text NOT NULL,
+    status_code integer NOT NULL,
+    client_ip text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS api_audit_created_idx ON api_audit (created_at);
+
 CREATE INDEX IF NOT EXISTS runs_version_time_idx ON runs (driver_version, completed_at);
 CREATE INDEX IF NOT EXISTS variations_scenario_seed_idx ON variations (scenario_id, seed);
 CREATE INDEX IF NOT EXISTS run_batches_status_idx ON run_batches (status, created_at);

@@ -32,7 +32,14 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
       - name: Dependency vulnerability scan
-        run: pip-audit -r requirements.txt
+        run: python -m pip_audit -r requirements.txt
+      - name: Dockerfile security scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: .
+          exit-code: 1
+          severity: CRITICAL,HIGH
       - run: psql postgresql://simfleet:simfleet@localhost:5432/simfleet -f db/schema.sql
       - name: Run PR smoke suite
         if: github.event_name == 'pull_request'
