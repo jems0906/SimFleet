@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
+import { fetchJson } from "../api.js";
 
 export default function ScenarioDetail() {
   const [data, setData] = useState(null);
   const [worst, setWorst] = useState([]);
   const [failures, setFailures] = useState([]);
   useEffect(() => {
-    const api = import.meta.env.VITE_API_URL || "";
     Promise.all([
-      fetch(`${api}/api/analytics/distributions?version=v1&metric=comfort_jerk`).then(r => r.json()),
-      fetch(`${api}/api/analytics/worst-trajectories?version=v1&metric=comfort_jerk&limit=3`).then(r => r.json()),
-      fetch(`${api}/api/analytics/failures`).then(r => r.json())
+      fetchJson("/api/analytics/distributions?version=v1&metric=comfort_jerk"),
+      fetchJson("/api/analytics/worst-trajectories?version=v1&metric=comfort_jerk&limit=3"),
+      fetchJson("/api/analytics/failures")
     ]).then(([distribution, worstData, failureData]) => {
       setData(distribution);
       setWorst(worstData.results || []);

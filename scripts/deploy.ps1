@@ -37,7 +37,7 @@ if ($LASTEXITCODE -ne 0) { throw "Worker image build failed" }
 
 $apiUrl = $first.apiUrl.value
 $dashboardUrl = $first.dashboardUrl.value
-docker build --file frontend/Dockerfile --build-arg "VITE_API_URL=$apiUrl" --tag "$acrServer/simfleet-dashboard:$tag" frontend
+docker build --file frontend/Dockerfile --tag "$acrServer/simfleet-dashboard:$tag" frontend
 if ($LASTEXITCODE -ne 0) { throw "Dashboard image build failed" }
 
 docker push "$acrServer/simfleet-api:$tag"
