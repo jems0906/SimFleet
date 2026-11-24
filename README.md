@@ -57,7 +57,7 @@ Configure these repository variables for GitHub OIDC:
 
 The Azure identity needs a federated credential with subject `repo:jems0906/SimFleet:environment:production` and Contributor access scoped to the deployment resource group. The workflow uses the existing registry's admin credentials only during image pushes; keep registry administration enabled for this Student Express deployment.
 
-The workflow provisions PostgreSQL, ACR, Container Apps, and the polling worker; builds images on the GitHub runner and pushes them to ACR (ACR Tasks are disabled for this subscription); redeploys with the real URLs; and temporarily opens PostgreSQL to the runner IP while seeding, then removes that rule.
+The workflow provisions PostgreSQL, ACR, Container Apps, and the polling worker; builds images on the GitHub runner and pushes them to ACR (ACR Tasks are disabled for this subscription); and redeploys with the real URLs. On startup, the worker applies the idempotent schema/demo seed from its packaged SQL files, so PostgreSQL does not need to be opened to GitHub runner IPs.
 
 For a local deployment:
 

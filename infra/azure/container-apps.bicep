@@ -103,7 +103,7 @@ resource worker 'Microsoft.App/containerApps@2024-10-02-preview' = {
       containers: [{ name: 'worker', image: workerImage, resources: { cpu: json('0.25'), memory: '0.5Gi' }, env: [
         { name: 'DATABASE_URL', secretRef: 'database-url' }
         { name: 'SIMFLEET_ENGINE', value: 'demo' }
-      ], args: ['--poll-interval-seconds', '20'] }]
+      ], args: ['--initialize-db', '--poll-interval-seconds', '20'] }]
       scale: { minReplicas: 1, maxReplicas: 1 }
     }
   }

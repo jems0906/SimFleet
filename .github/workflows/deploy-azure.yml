@@ -122,31 +122,6 @@ jobs:
               dashboardImage="$ACR_SERVER/simfleet-dashboard:${GITHUB_SHA}" \
               dashboardUrl="${{ steps.urls.outputs.dashboard_url }}"
 
-      - name: Initialize PostgreSQL schema and demo data
-        shell: bash
-        run: |
-          POSTGRES_HOST="$POSTGRES_NAME.postgres.database.azure.com"
-          RUN_FIREWALL_RULE="github-${GITHUB_RUN_ID}"
-          RUNNER_IP=$(curl -fsS https://api.ipify.org)
-          az postgres flexible-server firewall-rule create \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --server-name "$POSTGRES_NAME" \
-            --name "$RUN_FIREWALL_RULE" \
-            --start-ip-address "$RUNNER_IP" \
-            --end-ip-address "$RUNNER_IP" \
-            --output none
-          cleanup_firewall() {
-            az postgres flexible-server firewall-rule delete \
-              --resource-group "$AZURE_RESOURCE_GROUP" \
-              --server-name "$POSTGRES_NAME" \
-              --name "$RUN_FIREWALL_RULE" --yes --output none || true
-          }
-          trap cleanup_firewall EXIT
-          docker run --rm -e PGPASSWORD="$POSTGRES_PASSWORD" -v "$GITHUB_WORKSPACE/db:/db:ro" postgres:16 \
-            psql "host=${POSTGRES_HOST} port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f /db/schema.sql
-          docker run --rm -e PGPASSWORD="$POSTGRES_PASSWORD" -v "$GITHUB_WORKSPACE/db:/db:ro" postgres:16 \
-            psql "host=${POSTGRES_HOST} port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f /db/seed/demo.sql
-
       - name: Print deployment URLs
         run: |
           echo "API: ${{ steps.urls.outputs.api_url }}"

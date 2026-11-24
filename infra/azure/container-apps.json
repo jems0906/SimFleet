@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.49.2.45890",
-      "templateHash": "3855063226730442136"
+      "templateHash": "1680187331800241956"
     }
   },
   "parameters": {
@@ -239,6 +239,7 @@
                 }
               ],
               "args": [
+                "--initialize-db",
                 "--poll-interval-seconds",
                 "20"
               ]
