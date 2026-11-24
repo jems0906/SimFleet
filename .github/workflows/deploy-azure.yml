@@ -125,9 +125,6 @@ jobs:
       - name: Initialize PostgreSQL schema and demo data
         shell: bash
         run: |
-          sudo apt-get update >/dev/null
-          sudo apt-get install -y postgresql-client >/dev/null
-          export PGPASSWORD="$POSTGRES_PASSWORD"
           POSTGRES_HOST="$POSTGRES_NAME.postgres.database.azure.com"
           RUN_FIREWALL_RULE="github-${GITHUB_RUN_ID}"
           RUNNER_IP=$(curl -fsS https://api.ipify.org)
@@ -145,8 +142,10 @@ jobs:
               --name "$RUN_FIREWALL_RULE" --yes --output none || true
           }
           trap cleanup_firewall EXIT
-          psql "host=${POSTGRES_HOST} port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f db/schema.sql
-          psql "host=${POSTGRES_HOST} port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f db/seed/demo.sql
+          docker run --rm -e PGPASSWORD="$POSTGRES_PASSWORD" -v "$GITHUB_WORKSPACE/db:/db:ro" postgres:16 \
+            psql "host=${POSTGRES_HOST} port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f /db/schema.sql
+          docker run --rm -e PGPASSWORD="$POSTGRES_PASSWORD" -v "$GITHUB_WORKSPACE/db:/db:ro" postgres:16 \
+            psql "host=${POSTGRES_HOST} port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f /db/seed/demo.sql
 
       - name: Print deployment URLs
         run: |
