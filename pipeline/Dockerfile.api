@@ -4,4 +4,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY pipeline ./pipeline
 COPY db ./db
+RUN addgroup --system --gid 10001 appgroup && adduser --system --uid 10001 --ingroup appgroup app
+RUN chown -R app:appgroup /app
+USER app
 CMD ["uvicorn", "pipeline.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

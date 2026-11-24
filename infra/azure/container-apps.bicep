@@ -119,7 +119,7 @@ resource dashboard 'Microsoft.App/containerApps@2024-10-02-preview' = {
   properties: {
     managedEnvironmentId: environment.id
     configuration: {
-      ingress: { external: true, targetPort: 80, transport: 'http' }
+      ingress: { external: true, targetPort: 8080, transport: 'http' }
       secrets: appSecrets
       registries: appRegistries
     }

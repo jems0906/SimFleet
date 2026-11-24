@@ -47,7 +47,7 @@ services:
       SIMFLEET_API_URL: http://api:8000
       SIMFLEET_API_KEY: local-demo-key
     ports:
-      - "5173:80"
+      - "5173:8080"
     depends_on:
       - api
 volumes:
