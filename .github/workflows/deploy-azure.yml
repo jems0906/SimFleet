@@ -2,7 +2,9 @@ name: Deploy SimFleet to Azure
 
 on:
   workflow_dispatch:
-  push:
+  workflow_run:
+    workflows: [SimFleet CI]
+    types: [completed]
     branches: [main]
 
 permissions:
@@ -15,17 +17,25 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     environment: production
     env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       ACR_NAME: ${{ vars.ACR_NAME }}
       POSTGRES_NAME: ${{ vars.POSTGRES_NAME }}
       LOCATION: ${{ vars.AZURE_LOCATION || 'northcentralus' }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
       API_KEY: ${{ secrets.SIMFLEET_API_KEY }}
+      ENTRA_TENANT_ID: ${{ vars.ENTRA_TENANT_ID }}
+      ENTRA_CLIENT_ID: ${{ vars.ENTRA_CLIENT_ID }}
+      ENTRA_ALLOWED_USER_IDS: ${{ vars.ENTRA_ALLOWED_USER_IDS || '[]' }}
+      ENTRA_CLIENT_SECRET: ${{ secrets.ENTRA_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Validate Azure deployment settings
         shell: bash
@@ -51,6 +61,15 @@ jobs:
           check_setting AZURE_SUBSCRIPTION_ID "$AZURE_SUBSCRIPTION_ID"
           check_setting POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
           check_setting SIMFLEET_API_KEY "$API_KEY"
+          if [ -n "$ENTRA_CLIENT_ID$ENTRA_TENANT_ID$ENTRA_CLIENT_SECRET" ] || [ "$ENTRA_ALLOWED_USER_IDS" != '[]' ]; then
+            check_setting ENTRA_CLIENT_ID "$ENTRA_CLIENT_ID"
+            check_setting ENTRA_TENANT_ID "$ENTRA_TENANT_ID"
+            check_setting ENTRA_CLIENT_SECRET "$ENTRA_CLIENT_SECRET"
+            if ! printf '%s' "$ENTRA_ALLOWED_USER_IDS" | jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and length > 0)' >/dev/null; then
+              echo 'ENTRA_ALLOWED_USER_IDS must be a non-empty JSON array of user object IDs.'
+              missing=1
+            fi
+          fi
           check_setting AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
           check_setting ACR_NAME "$ACR_NAME"
           check_setting POSTGRES_NAME "$POSTGRES_NAME"
@@ -72,63 +91,56 @@ jobs:
             az group create --name "$AZURE_RESOURCE_GROUP" --location "$LOCATION"
           fi
 
-      - name: Provision Azure infrastructure
-        id: infra
+      - name: Ensure container registry exists
         shell: bash
         run: |
-          az deployment group create \
-            --name "simfleet-${GITHUB_RUN_ID}-base" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --template-file infra/azure/container-apps.bicep \
-            --parameters location="$LOCATION" acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" apiKey="$API_KEY" \
-            --query properties.outputs -o json > outputs.json
-          cat outputs.json
+          if ! az acr show --name "$ACR_NAME" >/dev/null 2>&1; then
+            az acr create --name "$ACR_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --location "$LOCATION" --sku Basic --admin-enabled true
+          fi
 
       - name: Build and push API and worker images
         shell: bash
         run: |
-          ACR_SERVER=$(jq -r '.acrLoginServer.value' outputs.json)
+          ACR_SERVER=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
           ACR_USERNAME=$(az acr credential show --name "$ACR_NAME" --query username -o tsv)
           ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --query 'passwords[0].value' -o tsv)
           echo "::add-mask::$ACR_PASSWORD"
           printf '%s' "$ACR_PASSWORD" | docker login "$ACR_SERVER" --username "$ACR_USERNAME" --password-stdin
-          docker build --file pipeline/Dockerfile.api --tag "$ACR_SERVER/simfleet-api:${GITHUB_SHA}" .
-          docker build --file pipeline/Dockerfile.worker --tag "$ACR_SERVER/simfleet-worker:${GITHUB_SHA}" .
-          docker push "$ACR_SERVER/simfleet-api:${GITHUB_SHA}"
-          docker push "$ACR_SERVER/simfleet-worker:${GITHUB_SHA}"
-
-      - name: Read provisioned URLs
-        id: urls
-        shell: bash
-        run: |
-          API_URL=$(jq -r '.apiUrl.value' outputs.json)
-          DASHBOARD_URL=$(jq -r '.dashboardUrl.value' outputs.json)
-          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
-          echo "dashboard_url=$DASHBOARD_URL" >> "$GITHUB_OUTPUT"
+          docker build --file pipeline/Dockerfile.api --tag "$ACR_SERVER/simfleet-api:${RELEASE_SHA}" .
+          docker build --file pipeline/Dockerfile.worker --tag "$ACR_SERVER/simfleet-worker:${RELEASE_SHA}" .
+          docker push "$ACR_SERVER/simfleet-api:${RELEASE_SHA}"
+          docker push "$ACR_SERVER/simfleet-worker:${RELEASE_SHA}"
 
       - name: Build and push dashboard
         shell: bash
         run: |
-          ACR_SERVER=$(jq -r '.acrLoginServer.value' outputs.json)
+          ACR_SERVER=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
           docker build --file frontend/Dockerfile \
-            --tag "$ACR_SERVER/simfleet-dashboard:${GITHUB_SHA}" frontend
-          docker push "$ACR_SERVER/simfleet-dashboard:${GITHUB_SHA}"
+            --tag "$ACR_SERVER/simfleet-dashboard:${RELEASE_SHA}" frontend
+          docker push "$ACR_SERVER/simfleet-dashboard:${RELEASE_SHA}"
 
       - name: Deploy application images
         shell: bash
         run: |
-          ACR_SERVER=$(jq -r '.acrLoginServer.value' outputs.json)
+          ACR_SERVER=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
+          AUTH_ENABLED=$(az containerapp auth show --name simfleet-dashboard --resource-group "$AZURE_RESOURCE_GROUP" --query platform.enabled -o tsv 2>/dev/null || true)
+          if [ "$AUTH_ENABLED" = 'true' ] && [ -z "$ENTRA_CLIENT_ID" ]; then
+            echo 'Refusing to remove Entra settings from an authentication-enabled dashboard.'
+            exit 1
+          fi
           az deployment group create \
             --name "simfleet-${GITHUB_RUN_ID}-apps" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --template-file infra/azure/container-apps.bicep \
             --parameters location="$LOCATION" acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" apiKey="$API_KEY" \
-              apiImage="$ACR_SERVER/simfleet-api:${GITHUB_SHA}" \
-              workerImage="$ACR_SERVER/simfleet-worker:${GITHUB_SHA}" \
-              dashboardImage="$ACR_SERVER/simfleet-dashboard:${GITHUB_SHA}" \
-              dashboardUrl="${{ steps.urls.outputs.dashboard_url }}"
+              apiImage="$ACR_SERVER/simfleet-api:${RELEASE_SHA}" \
+              workerImage="$ACR_SERVER/simfleet-worker:${RELEASE_SHA}" \
+              dashboardImage="$ACR_SERVER/simfleet-dashboard:${RELEASE_SHA}" \
+              entraTenantId="$ENTRA_TENANT_ID" entraClientId="$ENTRA_CLIENT_ID" \
+              entraClientSecret="$ENTRA_CLIENT_SECRET" entraAllowedUserIds="$ENTRA_ALLOWED_USER_IDS" \
+            --query properties.outputs -o json > outputs.json
 
       - name: Print deployment URLs
         run: |
-          echo "API: ${{ steps.urls.outputs.api_url }}"
-          echo "Dashboard: ${{ steps.urls.outputs.dashboard_url }}"
+          echo "API: $(jq -r '.apiUrl.value' outputs.json)"
+          echo "Dashboard: $(jq -r '.dashboardUrl.value' outputs.json)"

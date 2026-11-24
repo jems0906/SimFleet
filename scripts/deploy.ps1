@@ -5,25 +5,35 @@ param(
     [Parameter(Mandatory)] [string] $PostgresName,
     [Parameter(Mandatory)] [PSCredential] $PostgresCredential,
     [string] $Location = "northcentralus",
-    [Parameter(Mandatory)] [PSCredential] $ApiCredential
+    [Parameter(Mandatory)] [PSCredential] $ApiCredential,
+    [string] $EntraTenantId = "",
+    [string] $EntraClientId = "",
+    [string[]] $EntraAllowedUserIds = @(),
+    [PSCredential] $EntraCredential
 )
 
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
 $plainPostgresPassword = $PostgresCredential.GetNetworkCredential().Password
 $plainApiKey = $ApiCredential.GetNetworkCredential().Password
+$plainEntraSecret = if ($EntraCredential) { $EntraCredential.GetNetworkCredential().Password } else { "" }
+if ($EntraClientId -or $EntraTenantId -or $EntraCredential -or $EntraAllowedUserIds.Count) {
+    if (-not ($EntraClientId -and $EntraTenantId -and $plainEntraSecret -and $EntraAllowedUserIds.Count)) {
+        throw "Entra tenant, client, credential, and allowed user IDs must be provided together"
+    }
+}
 
 az account set --subscription $SubscriptionId
 az group create --name $ResourceGroup --location $Location | Out-Null
 
-$first = az deployment group create `
-    --resource-group $ResourceGroup `
-    --template-file infra/azure/container-apps.bicep `
-    --parameters location=$Location acrName=$AcrName postgresName=$PostgresName postgresPassword=$plainPostgresPassword apiKey=$plainApiKey `
-    --query properties.outputs -o json | ConvertFrom-Json
+az acr show --name $AcrName --output none 2>$null
+if ($LASTEXITCODE -ne 0) {
+    az acr create --name $AcrName --resource-group $ResourceGroup --location $Location --sku Basic --admin-enabled true --output none
+    if ($LASTEXITCODE -ne 0) { throw "Registry creation failed" }
+}
 
 $tag = (git rev-parse --short HEAD)
-$acrServer = $first.acrLoginServer.value
+$acrServer = az acr show --name $AcrName --query loginServer -o tsv
 $acrCredentials = az acr credential show --name $AcrName | ConvertFrom-Json
 $acrUsername = $acrCredentials.username
 $acrPassword = $acrCredentials.passwords[0].value
@@ -35,8 +45,6 @@ if ($LASTEXITCODE -ne 0) { throw "API image build failed" }
 docker build --file pipeline/Dockerfile.worker --tag "$acrServer/simfleet-worker:$tag" .
 if ($LASTEXITCODE -ne 0) { throw "Worker image build failed" }
 
-$apiUrl = $first.apiUrl.value
-$dashboardUrl = $first.dashboardUrl.value
 docker build --file frontend/Dockerfile --tag "$acrServer/simfleet-dashboard:$tag" frontend
 if ($LASTEXITCODE -ne 0) { throw "Dashboard image build failed" }
 
@@ -47,14 +55,23 @@ if ($LASTEXITCODE -ne 0) { throw "Worker image push failed" }
 docker push "$acrServer/simfleet-dashboard:$tag"
 if ($LASTEXITCODE -ne 0) { throw "Dashboard image push failed" }
 
-az deployment group create `
+$authEnabled = az containerapp auth show --name simfleet-dashboard --resource-group $ResourceGroup --query platform.enabled -o tsv 2>$null
+if ($authEnabled -eq "true" -and -not $EntraClientId) { throw "Refusing to remove existing Entra settings" }
+$allowedUserIdsJson = ConvertTo-Json -InputObject @($EntraAllowedUserIds) -Compress
+$deployment = az deployment group create `
     --resource-group $ResourceGroup `
     --template-file infra/azure/container-apps.bicep `
     --parameters location=$Location acrName=$AcrName postgresName=$PostgresName postgresPassword=$plainPostgresPassword apiKey=$plainApiKey `
       apiImage="$acrServer/simfleet-api:$tag" `
       workerImage="$acrServer/simfleet-worker:$tag" `
       dashboardImage="$acrServer/simfleet-dashboard:$tag" `
-      dashboardUrl=$dashboardUrl
+    entraTenantId=$EntraTenantId entraClientId=$EntraClientId `
+    entraClientSecret=$plainEntraSecret entraAllowedUserIds=$allowedUserIdsJson `
+    --query properties.outputs -o json
+if ($LASTEXITCODE -ne 0) { throw "Application deployment failed" }
+$outputs = $deployment | ConvertFrom-Json
+$apiUrl = $outputs.apiUrl.value
+$dashboardUrl = $outputs.dashboardUrl.value
 
 $postgresHost = "$PostgresName.postgres.database.azure.com"
 $firewallRuleName = "local-deploy-$tag"

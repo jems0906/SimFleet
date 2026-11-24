@@ -56,6 +56,11 @@ jobs:
         env:
           DATABASE_URL: postgresql://simfleet:simfleet@localhost:5432/simfleet
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seed/demo.sql
+      - name: Database restore rehearsal
+        run: |
+          docker run --rm -i --network host \
+            --env PGHOST=127.0.0.1 --env PGUSER=simfleet --env PGPASSWORD=simfleet --env PGDATABASE=simfleet \
+            postgres:16 sh -s < scripts/verify-restore.sh
       - name: Build pass-rate summary
         if: github.event_name == 'pull_request'
         env:
@@ -78,5 +83,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install && npm run build
+      - run: npm ci && npm run build
+        working-directory: frontend
+      - name: Install browser test runtime
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Dashboard browser regression tests
+        run: npm test
         working-directory: frontend

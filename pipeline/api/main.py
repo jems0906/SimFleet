@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 
 import hashlib
 import json
+import secrets
 import time
 
 import jwt
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 from pipeline.api.db import fetch_all, fetch_window
 from pipeline.api.queries import load_query
@@ -21,28 +23,36 @@ API_KEY = os.getenv("SIMFLEET_API_KEY")
 JWT_ISSUER = os.getenv("SIMFLEET_JWT_ISSUER")
 JWT_AUDIENCE = os.getenv("SIMFLEET_JWT_AUDIENCE")
 JWT_JWKS_URL = os.getenv("SIMFLEET_JWT_JWKS_URL")
+JWT_REQUIRED_ROLE = os.getenv("SIMFLEET_JWT_REQUIRED_ROLE", "SimFleet.Reader")
 if not API_KEY:
     raise RuntimeError("SIMFLEET_API_KEY is required")
+if any((JWT_ISSUER, JWT_AUDIENCE, JWT_JWKS_URL)) and not all((JWT_ISSUER, JWT_AUDIENCE, JWT_JWKS_URL)):
+    raise RuntimeError("JWT issuer, audience, and JWKS URL must be configured together")
+signing_key_client = jwt.PyJWKClient(JWT_JWKS_URL, timeout=5.0) if JWT_JWKS_URL else None
 
 
 def require_api_key(
     x_api_key: str = Header(default=""),
     authorization: str = Header(default=""),
 ) -> None:
-    if x_api_key == API_KEY:
+    if secrets.compare_digest(x_api_key.encode("utf-8"), API_KEY.encode("utf-8")):
         return
 
-    if JWT_JWKS_URL and authorization.startswith("Bearer "):
+    if signing_key_client and authorization.startswith("Bearer "):
         token = authorization.removeprefix("Bearer ").strip()
         try:
-            signing_keys = jwt.PyJWKClient(JWT_JWKS_URL, timeout=5.0).get_signing_key_from_jwt(token)
-            jwt.decode(
+            signing_keys = signing_key_client.get_signing_key_from_jwt(token)
+            claims = jwt.decode(
                 token,
                 signing_keys.key,
                 algorithms=["RS256"],
                 issuer=JWT_ISSUER,
                 audience=JWT_AUDIENCE,
+                options={"require": ["exp", "iat", "sub", "iss", "aud"]},
             )
+            roles = claims.get("roles", [])
+            if not isinstance(roles, list) or JWT_REQUIRED_ROLE not in roles:
+                raise HTTPException(status_code=403, detail="required role missing")
             return
         except jwt.PyJWTError:
             raise HTTPException(status_code=401, detail="invalid bearer token")
@@ -63,28 +73,38 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             window = self.requests.setdefault(principal, [])
             window[:] = [timestamp for timestamp in window if now - timestamp < 60]
             if len(window) >= 60:
-                raise HTTPException(status_code=429, detail="rate limit exceeded")
+                return JSONResponse({"detail": "rate limit exceeded"}, status_code=429, headers={"Retry-After": "60"})
             window.append(now)
         return await call_next(request)
 
 
 class AuditMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        if request.url.path.startswith("/api/"):
-            principal = request.headers.get("x-api-key", "bearer")
-            forwarded = request.headers.get("x-forwarded-for")
-            ip = forwarded.split(",", 1)[0].strip() if forwarded else (request.client.host if request.client else "unknown")
+        if not request.url.path.startswith("/api/"):
+            return await call_next(request)
+        request_id = secrets.token_hex(16)
+        started = time.monotonic()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            response.headers["X-Request-ID"] = request_id
+            return response
+        finally:
+            credential = request.headers.get("x-api-key") or request.headers.get("authorization")
             audit_record = {
                 "event": "api_request",
-                "principal_type": "api-key" if principal != "bearer" else "bearer",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "request_id": request_id,
+                "principal_type": "api-key" if request.headers.get("x-api-key") else ("bearer" if credential else "anonymous"),
+                "principal_id": hashlib.sha256(credential.encode("utf-8")).hexdigest()[:16] if credential else "anonymous",
                 "method": request.method,
                 "path": request.url.path,
-                "status_code": response.status_code,
-                "client_ip": ip,
+                "status_code": status_code,
+                "duration_ms": round((time.monotonic() - started) * 1000, 2),
+                "client_ip": request.client.host if request.client else "unknown",
             }
             print(json.dumps(audit_record, separators=(",", ":")), flush=True)
-        return response
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

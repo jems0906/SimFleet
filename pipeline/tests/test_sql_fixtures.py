@@ -1,9 +1,16 @@
 import os
+import json
+from types import SimpleNamespace
 
+import jwt
+import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("SIMFLEET_API_KEY", "local-demo-key")
 from pipeline.api.main import app
+import pipeline.api.main as api_module
 from pipeline.api.queries import load_query
 from pipeline.generate_batches import VariationPolicy, create_batch
 from pipeline.tests.conftest import ROOT, add_run
@@ -129,6 +136,55 @@ def test_api_rejects_missing_key(db):
     assert client.get("/health").status_code == 200
     assert client.get("/api/versions").status_code == 401
     assert client.get("/api/versions", headers={"X-API-Key": "wrong"}).status_code == 401
+
+
+@pytest.mark.parametrize("roles,expected", [(["SimFleet.Reader"], 200), ([], 403), (["Other.Role"], 403), ("SimFleet.Reader", 403)])
+def test_api_requires_reader_role(monkeypatch, roles, expected):
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = int(api_module.time.time())
+    token = jwt.encode(
+        {"sub": "test-user", "iss": "https://issuer.example", "aud": "simfleet", "iat": now, "exp": now + 60, "roles": roles},
+        private_key,
+        algorithm="RS256",
+    )
+    key_client = SimpleNamespace(get_signing_key_from_jwt=lambda token: SimpleNamespace(key=private_key.public_key()))
+    monkeypatch.setattr(api_module, "signing_key_client", key_client)
+    monkeypatch.setattr(api_module, "JWT_ISSUER", "https://issuer.example")
+    monkeypatch.setattr(api_module, "JWT_AUDIENCE", "simfleet")
+    monkeypatch.setattr(api_module, "fetch_all", lambda *args: [])
+    client = TestClient(app)
+    assert client.get("/api/versions", headers={"Authorization": f"Bearer {token}"}).status_code == expected
+
+
+def test_rate_limit_returns_429():
+    limited_app = FastAPI()
+    limited_app.add_middleware(api_module.RateLimitMiddleware)
+
+    @limited_app.get("/api/test")
+    def endpoint():
+        return {"ok": True}
+
+    client = TestClient(limited_app)
+    for _ in range(60):
+        assert client.get("/api/test").status_code == 200
+    response = client.get("/api/test")
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "60"
+
+
+def test_audit_record_does_not_log_credentials_or_query(monkeypatch, capsys):
+    monkeypatch.setattr(api_module, "fetch_all", lambda *args: [])
+    client = TestClient(app)
+    response = client.get("/api/versions?private=do-not-log", headers={"X-API-Key": api_module.API_KEY, "X-Forwarded-For": "spoofed"})
+    assert response.status_code == 200
+    output = capsys.readouterr().out
+    record = json.loads(output.strip())
+    assert record["request_id"] == response.headers["X-Request-ID"]
+    assert record["status_code"] == 200
+    assert record["duration_ms"] >= 0
+    assert record["client_ip"] != "spoofed"
+    assert api_module.API_KEY not in output
+    assert "do-not-log" not in output
 
 
 def test_demo_seed_is_idempotent(db):
