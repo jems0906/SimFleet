@@ -34,12 +34,12 @@ jobs:
       - run: psql postgresql://simfleet:simfleet@localhost:5432/simfleet -f db/schema.sql
       - name: Run PR smoke suite
         if: github.event_name == 'pull_request'
-        run: pytest pipeline/tests/test_regression_query.py pipeline/tests/test_flaky_detection.py pipeline/tests/test_sql_fixtures.py -q
+        run: python -m pytest pipeline/tests/test_regression_query.py pipeline/tests/test_flaky_detection.py pipeline/tests/test_sql_fixtures.py -q
         env:
           DATABASE_URL: postgresql://simfleet:simfleet@localhost:5432/simfleet
       - name: Run full suite
         if: github.event_name != 'pull_request'
-        run: pytest pipeline/tests -q
+        run: python -m pytest pipeline/tests -q
         env:
           DATABASE_URL: postgresql://simfleet:simfleet@localhost:5432/simfleet
       - name: Seed pass-rate smoke data
