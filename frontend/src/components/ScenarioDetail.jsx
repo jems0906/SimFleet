@@ -5,7 +5,7 @@ export default function ScenarioDetail() {
   const [worst, setWorst] = useState([]);
   const [failures, setFailures] = useState([]);
   useEffect(() => {
-    const api = import.meta.env.VITE_API_URL || "http://localhost:8000";
+    const api = import.meta.env.VITE_API_URL || "";
     Promise.all([
       fetch(`${api}/api/analytics/distributions?version=v1&metric=comfort_jerk`).then(r => r.json()),
       fetch(`${api}/api/analytics/worst-trajectories?version=v1&metric=comfort_jerk&limit=3`).then(r => r.json()),

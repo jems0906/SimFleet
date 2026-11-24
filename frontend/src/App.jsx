@@ -4,7 +4,7 @@ import ScenarioDetail from "./components/ScenarioDetail.jsx";
 import FlakyList from "./components/FlakyList.jsx";
 import BatchHealth from "./components/BatchHealth.jsx";
 
-const api = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const api = import.meta.env.VITE_API_URL || "";
 
 export default function App() {
   const [data, setData] = useState({ passRates: [], regressions: [], flaky: [], batches: [] });
