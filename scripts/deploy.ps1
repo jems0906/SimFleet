@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $AcrName,
     [Parameter(Mandatory)] [string] $PostgresName,
     [Parameter(Mandatory)] [PSCredential] $PostgresCredential,
-    [string] $Location = "eastus"
+    [string] $Location = "northcentralus"
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,32 +17,64 @@ az group create --name $ResourceGroup --location $Location | Out-Null
 $first = az deployment group create `
     --resource-group $ResourceGroup `
     --template-file infra/azure/container-apps.bicep `
-    --parameters acrName=$AcrName postgresName=$PostgresName postgresPassword=$plainPostgresPassword `
+    --parameters location=$Location acrName=$AcrName postgresName=$PostgresName postgresPassword=$plainPostgresPassword `
     --query properties.outputs -o json | ConvertFrom-Json
 
 $tag = (git rev-parse --short HEAD)
+$acrServer = $first.acrLoginServer.value
+$acrCredentials = az acr credential show --name $AcrName | ConvertFrom-Json
+$acrUsername = $acrCredentials.username
+$acrPassword = $acrCredentials.passwords[0].value
+"$acrPassword`n" | docker login $acrServer --username $acrUsername --password-stdin
+if ($LASTEXITCODE -ne 0) { throw "Docker login to ACR failed" }
 
-az acr build --registry $AcrName --image "simfleet-api:$tag" --file pipeline/Dockerfile.api .
-az acr build --registry $AcrName --image "simfleet-worker:$tag" --file pipeline/Dockerfile.worker .
+docker build --file pipeline/Dockerfile.api --tag "$acrServer/simfleet-api:$tag" .
+if ($LASTEXITCODE -ne 0) { throw "API image build failed" }
+docker build --file pipeline/Dockerfile.worker --tag "$acrServer/simfleet-worker:$tag" .
+if ($LASTEXITCODE -ne 0) { throw "Worker image build failed" }
 
 $apiUrl = $first.apiUrl.value
 $dashboardUrl = $first.dashboardUrl.value
-az acr build --registry $AcrName --image "simfleet-dashboard:$tag" --build-arg "VITE_API_URL=$apiUrl" --file frontend/Dockerfile frontend
+docker build --file frontend/Dockerfile --build-arg "VITE_API_URL=$apiUrl" --tag "$acrServer/simfleet-dashboard:$tag" frontend
+if ($LASTEXITCODE -ne 0) { throw "Dashboard image build failed" }
 
-$acrServer = $first.acrLoginServer.value
+docker push "$acrServer/simfleet-api:$tag"
+if ($LASTEXITCODE -ne 0) { throw "API image push failed" }
+docker push "$acrServer/simfleet-worker:$tag"
+if ($LASTEXITCODE -ne 0) { throw "Worker image push failed" }
+docker push "$acrServer/simfleet-dashboard:$tag"
+if ($LASTEXITCODE -ne 0) { throw "Dashboard image push failed" }
+
 az deployment group create `
     --resource-group $ResourceGroup `
     --template-file infra/azure/container-apps.bicep `
-    --parameters acrName=$AcrName postgresName=$PostgresName postgresPassword=$plainPostgresPassword `
+    --parameters location=$Location acrName=$AcrName postgresName=$PostgresName postgresPassword=$plainPostgresPassword `
       apiImage="$acrServer/simfleet-api:$tag" `
       workerImage="$acrServer/simfleet-worker:$tag" `
       dashboardImage="$acrServer/simfleet-dashboard:$tag" `
       dashboardUrl=$dashboardUrl
 
-$env:PGPASSWORD = $plainPostgresPassword
 $postgresHost = "$PostgresName.postgres.database.azure.com"
-psql "host=$postgresHost port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f db/schema.sql
-psql "host=$postgresHost port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f db/seed/demo.sql
+$firewallRuleName = "local-deploy-$tag"
+$clientIp = (Invoke-RestMethod -Uri "https://api.ipify.org").Trim()
+az postgres flexible-server firewall-rule create `
+    --resource-group $ResourceGroup `
+    --server-name $PostgresName `
+    --name $firewallRuleName `
+    --start-ip-address $clientIp `
+    --end-ip-address $clientIp `
+    --output none
+if ($LASTEXITCODE -ne 0) { throw "Temporary PostgreSQL firewall rule creation failed" }
+try {
+    $env:DATABASE_URL = "postgresql://simfleet:$plainPostgresPassword@$postgresHost`:5432/simfleet?sslmode=require"
+    $python = Join-Path $PSScriptRoot "..\.venv\Scripts\python.exe"
+    if (-not (Test-Path $python)) { $python = "python" }
+    & $python -c "import os,pathlib,psycopg; c=psycopg.connect(os.environ['DATABASE_URL'],autocommit=True); c.execute(pathlib.Path('db/schema.sql').read_text(encoding='utf-8'),prepare=False); c.execute(pathlib.Path('db/seed/demo.sql').read_text(encoding='utf-8'),prepare=False); c.close()"
+    if ($LASTEXITCODE -ne 0) { throw "Database schema or demo seed failed" }
+}
+finally {
+    az postgres flexible-server firewall-rule delete --resource-group $ResourceGroup --server-name $PostgresName --name $firewallRuleName --yes --output none
+}
 
 Write-Host "API: $apiUrl"
 Write-Host "Dashboard: $dashboardUrl"

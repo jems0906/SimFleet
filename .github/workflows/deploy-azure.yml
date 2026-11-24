@@ -17,7 +17,7 @@ jobs:
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       ACR_NAME: ${{ vars.ACR_NAME }}
       POSTGRES_NAME: ${{ vars.POSTGRES_NAME }}
-      LOCATION: ${{ vars.AZURE_LOCATION || 'eastus' }}
+      LOCATION: ${{ vars.AZURE_LOCATION || 'northcentralus' }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
@@ -25,9 +25,9 @@ jobs:
       - name: Validate Azure deployment settings
         shell: bash
         env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
           ACR_NAME: ${{ vars.ACR_NAME }}
@@ -54,12 +54,16 @@ jobs:
 
       - uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Create resource group
-        run: az group create --name "$AZURE_RESOURCE_GROUP" --location "$LOCATION"
+        shell: bash
+        run: |
+          if ! az group show --name "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+            az group create --name "$AZURE_RESOURCE_GROUP" --location "$LOCATION"
+          fi
 
       - name: Provision Azure infrastructure
         id: infra
@@ -68,15 +72,22 @@ jobs:
           az deployment group create \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --template-file infra/azure/container-apps.bicep \
-            --parameters acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" \
+            --parameters location="$LOCATION" acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" \
             --query properties.outputs -o json > outputs.json
           cat outputs.json
 
-      - name: Build and push API
-        run: az acr build --registry "$ACR_NAME" --image "simfleet-api:${GITHUB_SHA}" --file pipeline/Dockerfile.api .
-
-      - name: Build and push worker
-        run: az acr build --registry "$ACR_NAME" --image "simfleet-worker:${GITHUB_SHA}" --file pipeline/Dockerfile.worker .
+      - name: Build and push API and worker images
+        shell: bash
+        run: |
+          ACR_SERVER=$(jq -r '.acrLoginServer.value' outputs.json)
+          ACR_USERNAME=$(az acr credential show --name "$ACR_NAME" --query username -o tsv)
+          ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --query 'passwords[0].value' -o tsv)
+          echo "::add-mask::$ACR_PASSWORD"
+          printf '%s' "$ACR_PASSWORD" | docker login "$ACR_SERVER" --username "$ACR_USERNAME" --password-stdin
+          docker build --file pipeline/Dockerfile.api --tag "$ACR_SERVER/simfleet-api:${GITHUB_SHA}" .
+          docker build --file pipeline/Dockerfile.worker --tag "$ACR_SERVER/simfleet-worker:${GITHUB_SHA}" .
+          docker push "$ACR_SERVER/simfleet-api:${GITHUB_SHA}"
+          docker push "$ACR_SERVER/simfleet-worker:${GITHUB_SHA}"
 
       - name: Read provisioned URLs
         id: urls
@@ -88,10 +99,13 @@ jobs:
           echo "dashboard_url=$DASHBOARD_URL" >> "$GITHUB_OUTPUT"
 
       - name: Build and push dashboard
+        shell: bash
         run: |
-          az acr build --registry "$ACR_NAME" --image "simfleet-dashboard:${GITHUB_SHA}" \
+          ACR_SERVER=$(jq -r '.acrLoginServer.value' outputs.json)
+          docker build --file frontend/Dockerfile \
             --build-arg "VITE_API_URL=${{ steps.urls.outputs.api_url }}" \
-            --file frontend/Dockerfile frontend
+            --tag "$ACR_SERVER/simfleet-dashboard:${GITHUB_SHA}" frontend
+          docker push "$ACR_SERVER/simfleet-dashboard:${GITHUB_SHA}"
 
       - name: Deploy application images
         shell: bash
@@ -100,7 +114,7 @@ jobs:
           az deployment group create \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --template-file infra/azure/container-apps.bicep \
-            --parameters acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" \
+            --parameters location="$LOCATION" acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" \
               apiImage="$ACR_SERVER/simfleet-api:${GITHUB_SHA}" \
               workerImage="$ACR_SERVER/simfleet-worker:${GITHUB_SHA}" \
               dashboardImage="$ACR_SERVER/simfleet-dashboard:${GITHUB_SHA}" \
@@ -113,6 +127,22 @@ jobs:
           sudo apt-get install -y postgresql-client >/dev/null
           export PGPASSWORD="$POSTGRES_PASSWORD"
           POSTGRES_HOST="$POSTGRES_NAME.postgres.database.azure.com"
+          RUN_FIREWALL_RULE="github-${GITHUB_RUN_ID}"
+          RUNNER_IP=$(curl -fsS https://api.ipify.org)
+          az postgres flexible-server firewall-rule create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --server-name "$POSTGRES_NAME" \
+            --name "$RUN_FIREWALL_RULE" \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP" \
+            --output none
+          cleanup_firewall() {
+            az postgres flexible-server firewall-rule delete \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --server-name "$POSTGRES_NAME" \
+              --name "$RUN_FIREWALL_RULE" --yes --output none || true
+          }
+          trap cleanup_firewall EXIT
           psql "host=${POSTGRES_HOST} port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f db/schema.sql
           psql "host=${POSTGRES_HOST} port=5432 dbname=simfleet user=simfleet sslmode=require" -v ON_ERROR_STOP=1 -f db/seed/demo.sql
 

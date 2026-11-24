@@ -38,21 +38,26 @@ The script starts PostgreSQL, applies the schema, and runs the fixture tests.
 
 ## Azure deployment
 
-GitHub Actions deploys on pushes to `main` or by manual workflow dispatch. Configure repository variables:
+GitHub Actions deploys on pushes to `main` or by manual workflow dispatch. This Azure for Students subscription currently permits North Central US and exposes Container Apps Express environments, which do not support ACA Jobs. The deployed worker is therefore a single-replica polling Container App; the Bicep Job design is not used in this subscription. Configure repository variables:
 
 - `AZURE_RESOURCE_GROUP`
 - `ACR_NAME`
 - `POSTGRES_NAME`
-- `AZURE_LOCATION` (optional, defaults to `eastus`)
+- `AZURE_LOCATION` (optional, defaults to `northcentralus`)
 
 Configure secrets:
+
+- `POSTGRES_PASSWORD`
+
+Configure these repository variables for GitHub OIDC:
 
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
-- `POSTGRES_PASSWORD`
 
-The workflow provisions PostgreSQL, ACR, Container Apps, and the worker job; builds three images; redeploys with the real URLs; and seeds the demo database.
+The Azure identity needs a federated credential with subject `repo:jems0906/SimFleet:environment:production` and Contributor access scoped to the deployment resource group. The workflow uses the existing registry's admin credentials only during image pushes; keep registry administration enabled for this Student Express deployment.
+
+The workflow provisions PostgreSQL, ACR, Container Apps, and the polling worker; builds images on the GitHub runner and pushes them to ACR (ACR Tasks are disabled for this subscription); redeploys with the real URLs; and temporarily opens PostgreSQL to the runner IP while seeding, then removes that rule.
 
 For a local deployment:
 
