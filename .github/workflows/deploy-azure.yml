@@ -70,6 +70,7 @@ jobs:
         shell: bash
         run: |
           az deployment group create \
+            --name "simfleet-${GITHUB_RUN_ID}-base" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --template-file infra/azure/container-apps.bicep \
             --parameters location="$LOCATION" acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" \
@@ -112,6 +113,7 @@ jobs:
         run: |
           ACR_SERVER=$(jq -r '.acrLoginServer.value' outputs.json)
           az deployment group create \
+            --name "simfleet-${GITHUB_RUN_ID}-apps" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --template-file infra/azure/container-apps.bicep \
             --parameters location="$LOCATION" acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" \
