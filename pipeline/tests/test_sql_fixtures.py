@@ -1,6 +1,6 @@
 from pipeline.api.queries import load_query
 from pipeline.generate_batches import VariationPolicy, create_batch
-from pipeline.tests.conftest import add_run
+from pipeline.tests.conftest import ROOT, add_run
 
 
 def test_pass_rates_and_failure_breakdown_hand_computed(db):
@@ -116,3 +116,26 @@ def test_late_result_changes_only_the_matching_time_window(db):
     assert len(after) == 1
     assert after[0]["run_count"] == 1
     assert after[0]["pass_rate"] == 1.0
+
+
+def test_demo_seed_is_idempotent(db):
+    conn, _ = db
+    seed_sql = (ROOT / "db" / "seed" / "demo.sql").read_text(encoding="utf-8")
+
+    conn.execute(seed_sql, prepare=False)
+    first = conn.execute(
+        "SELECT (SELECT count(*) FROM scenarios) AS scenarios, "
+        "(SELECT count(*) FROM run_batches) AS batches, "
+        "(SELECT count(*) FROM runs) AS runs, "
+        "(SELECT count(*) FROM run_metrics) AS metrics"
+    ).fetchone()
+
+    conn.execute(seed_sql, prepare=False)
+    second = conn.execute(
+        "SELECT (SELECT count(*) FROM scenarios) AS scenarios, "
+        "(SELECT count(*) FROM run_batches) AS batches, "
+        "(SELECT count(*) FROM runs) AS runs, "
+        "(SELECT count(*) FROM run_metrics) AS metrics"
+    ).fetchone()
+
+    assert first == second
