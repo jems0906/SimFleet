@@ -5,6 +5,8 @@ param acrName string
 param postgresAdminUser string = 'simfleet'
 @secure()
 param postgresPassword string
+@secure()
+param apiKey string
 param postgresName string
 param apiImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
 param workerImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
@@ -62,6 +64,7 @@ var registryCredentials = registry.listCredentials()
 var appSecrets = [
   { name: 'acr-password', value: registryCredentials.passwords[0].value }
   { name: 'database-url', value: databaseUrl }
+  { name: 'api-key', value: apiKey }
 ]
 
 var appRegistries = [{
@@ -83,6 +86,7 @@ resource api 'Microsoft.App/containerApps@2024-10-02-preview' = {
     template: {
       containers: [{ name: 'api', image: apiImage, resources: { cpu: json('0.25'), memory: '0.5Gi' }, env: [
         { name: 'DATABASE_URL', secretRef: 'database-url' }
+        { name: 'SIMFLEET_API_KEY', secretRef: 'api-key' }
         { name: 'CORS_ORIGINS', value: dashboardUrl }
       ] }]
       scale: { minReplicas: 1, maxReplicas: 3 }
@@ -120,7 +124,10 @@ resource dashboard 'Microsoft.App/containerApps@2024-10-02-preview' = {
       registries: appRegistries
     }
     template: {
-      containers: [{ name: 'dashboard', image: dashboardImage, resources: { cpu: json('0.25'), memory: '0.5Gi' } }]
+      containers: [{ name: 'dashboard', image: dashboardImage, resources: { cpu: json('0.25'), memory: '0.5Gi' }, env: [
+        { name: 'SIMFLEET_API_URL', value: 'https://${api.properties.configuration.ingress.fqdn}' }
+        { name: 'SIMFLEET_API_KEY', secretRef: 'api-key' }
+      ] }]
       scale: { minReplicas: 1, maxReplicas: 2 }
     }
   }

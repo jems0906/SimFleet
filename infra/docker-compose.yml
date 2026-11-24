@@ -23,6 +23,7 @@ services:
       dockerfile: pipeline/Dockerfile.api
     environment:
       DATABASE_URL: postgresql://simfleet:simfleet@db:5432/simfleet
+      SIMFLEET_API_KEY: local-demo-key
     ports:
       - "8000:8000"
     depends_on:
@@ -43,7 +44,8 @@ services:
     build:
       context: ../frontend
     environment:
-      VITE_API_URL: http://localhost:8000
+      SIMFLEET_API_URL: http://api:8000
+      SIMFLEET_API_KEY: local-demo-key
     ports:
       - "5173:80"
     depends_on:

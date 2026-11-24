@@ -1,0 +1,18 @@
+server {
+    listen 80;
+    server_name _;
+
+    location /api/ {
+        proxy_pass ${SIMFLEET_API_URL};
+        proxy_set_header X-API-Key ${SIMFLEET_API_KEY};
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_ssl_server_name on;
+    }
+
+    location / {
+        root /usr/share/nginx/html;
+        try_files $uri $uri/ /index.html;
+    }
+}

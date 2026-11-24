@@ -4,12 +4,14 @@ param(
     [Parameter(Mandatory)] [string] $AcrName,
     [Parameter(Mandatory)] [string] $PostgresName,
     [Parameter(Mandatory)] [PSCredential] $PostgresCredential,
-    [string] $Location = "northcentralus"
+    [string] $Location = "northcentralus",
+    [Parameter(Mandatory)] [PSCredential] $ApiCredential
 )
 
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
 $plainPostgresPassword = $PostgresCredential.GetNetworkCredential().Password
+$plainApiKey = $ApiCredential.GetNetworkCredential().Password
 
 az account set --subscription $SubscriptionId
 az group create --name $ResourceGroup --location $Location | Out-Null
@@ -17,7 +19,7 @@ az group create --name $ResourceGroup --location $Location | Out-Null
 $first = az deployment group create `
     --resource-group $ResourceGroup `
     --template-file infra/azure/container-apps.bicep `
-    --parameters location=$Location acrName=$AcrName postgresName=$PostgresName postgresPassword=$plainPostgresPassword `
+    --parameters location=$Location acrName=$AcrName postgresName=$PostgresName postgresPassword=$plainPostgresPassword apiKey=$plainApiKey `
     --query properties.outputs -o json | ConvertFrom-Json
 
 $tag = (git rev-parse --short HEAD)
@@ -48,7 +50,7 @@ if ($LASTEXITCODE -ne 0) { throw "Dashboard image push failed" }
 az deployment group create `
     --resource-group $ResourceGroup `
     --template-file infra/azure/container-apps.bicep `
-    --parameters location=$Location acrName=$AcrName postgresName=$PostgresName postgresPassword=$plainPostgresPassword `
+    --parameters location=$Location acrName=$AcrName postgresName=$PostgresName postgresPassword=$plainPostgresPassword apiKey=$plainApiKey `
       apiImage="$acrServer/simfleet-api:$tag" `
       workerImage="$acrServer/simfleet-worker:$tag" `
       dashboardImage="$acrServer/simfleet-dashboard:$tag" `

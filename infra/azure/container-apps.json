@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.49.2.45890",
-      "templateHash": "1680187331800241956"
+      "templateHash": "9417900801508231868"
     }
   },
   "parameters": {
@@ -21,6 +21,9 @@
       "defaultValue": "simfleet"
     },
     "postgresPassword": {
+      "type": "securestring"
+    },
+    "apiKey": {
       "type": "securestring"
     },
     "postgresName": {
@@ -151,6 +154,10 @@
             {
               "name": "database-url",
               "value": "[variables('databaseUrl')]"
+            },
+            {
+              "name": "api-key",
+              "value": "[parameters('apiKey')]"
             }
           ],
           "registries": [
@@ -174,6 +181,10 @@
                 {
                   "name": "DATABASE_URL",
                   "secretRef": "database-url"
+                },
+                {
+                  "name": "SIMFLEET_API_KEY",
+                  "secretRef": "api-key"
                 },
                 {
                   "name": "CORS_ORIGINS",
@@ -209,6 +220,10 @@
             {
               "name": "database-url",
               "value": "[variables('databaseUrl')]"
+            },
+            {
+              "name": "api-key",
+              "value": "[parameters('apiKey')]"
             }
           ],
           "registries": [
@@ -277,6 +292,10 @@
             {
               "name": "database-url",
               "value": "[variables('databaseUrl')]"
+            },
+            {
+              "name": "api-key",
+              "value": "[parameters('apiKey')]"
             }
           ],
           "registries": [
@@ -295,7 +314,17 @@
               "resources": {
                 "cpu": "[json('0.25')]",
                 "memory": "0.5Gi"
-              }
+              },
+              "env": [
+                {
+                  "name": "SIMFLEET_API_URL",
+                  "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', 'simfleet-api'), '2024-10-02-preview').configuration.ingress.fqdn)]"
+                },
+                {
+                  "name": "SIMFLEET_API_KEY",
+                  "secretRef": "api-key"
+                }
+              ]
             }
           ],
           "scale": {
@@ -305,6 +334,7 @@
         }
       },
       "dependsOn": [
+        "[resourceId('Microsoft.App/containerApps', 'simfleet-api')]",
         "[resourceId('Microsoft.App/managedEnvironments', 'simfleet-env')]",
         "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]"
       ]

@@ -23,6 +23,7 @@ jobs:
       POSTGRES_NAME: ${{ vars.POSTGRES_NAME }}
       LOCATION: ${{ vars.AZURE_LOCATION || 'northcentralus' }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      API_KEY: ${{ secrets.SIMFLEET_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +34,7 @@ jobs:
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          API_KEY: ${{ secrets.SIMFLEET_API_KEY }}
           AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
           ACR_NAME: ${{ vars.ACR_NAME }}
           POSTGRES_NAME: ${{ vars.POSTGRES_NAME }}
@@ -48,6 +50,7 @@ jobs:
           check_setting AZURE_TENANT_ID "$AZURE_TENANT_ID"
           check_setting AZURE_SUBSCRIPTION_ID "$AZURE_SUBSCRIPTION_ID"
           check_setting POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+          check_setting SIMFLEET_API_KEY "$API_KEY"
           check_setting AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
           check_setting ACR_NAME "$ACR_NAME"
           check_setting POSTGRES_NAME "$POSTGRES_NAME"
@@ -77,7 +80,7 @@ jobs:
             --name "simfleet-${GITHUB_RUN_ID}-base" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --template-file infra/azure/container-apps.bicep \
-            --parameters location="$LOCATION" acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" \
+            --parameters location="$LOCATION" acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" apiKey="$API_KEY" \
             --query properties.outputs -o json > outputs.json
           cat outputs.json
 
@@ -120,7 +123,7 @@ jobs:
             --name "simfleet-${GITHUB_RUN_ID}-apps" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --template-file infra/azure/container-apps.bicep \
-            --parameters location="$LOCATION" acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" \
+            --parameters location="$LOCATION" acrName="$ACR_NAME" postgresName="$POSTGRES_NAME" postgresPassword="$POSTGRES_PASSWORD" apiKey="$API_KEY" \
               apiImage="$ACR_SERVER/simfleet-api:${GITHUB_SHA}" \
               workerImage="$ACR_SERVER/simfleet-worker:${GITHUB_SHA}" \
               dashboardImage="$ACR_SERVER/simfleet-dashboard:${GITHUB_SHA}" \

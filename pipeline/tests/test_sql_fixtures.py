@@ -1,3 +1,9 @@
+import os
+
+from fastapi.testclient import TestClient
+
+os.environ.setdefault("SIMFLEET_API_KEY", "local-demo-key")
+from pipeline.api.main import app
 from pipeline.api.queries import load_query
 from pipeline.generate_batches import VariationPolicy, create_batch
 from pipeline.tests.conftest import ROOT, add_run
@@ -116,6 +122,13 @@ def test_late_result_changes_only_the_matching_time_window(db):
     assert len(after) == 1
     assert after[0]["run_count"] == 1
     assert after[0]["pass_rate"] == 1.0
+
+
+def test_api_rejects_missing_key(db):
+    client = TestClient(app)
+    assert client.get("/health").status_code == 200
+    assert client.get("/api/versions").status_code == 401
+    assert client.get("/api/versions", headers={"X-API-Key": "wrong"}).status_code == 401
 
 
 def test_demo_seed_is_idempotent(db):

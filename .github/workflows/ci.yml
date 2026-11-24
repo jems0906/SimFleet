@@ -31,6 +31,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
+      - name: Dependency vulnerability scan
+        run: pip-audit -r requirements.txt
       - run: psql postgresql://simfleet:simfleet@localhost:5432/simfleet -f db/schema.sql
       - name: Run PR smoke suite
         if: github.event_name == 'pull_request'
