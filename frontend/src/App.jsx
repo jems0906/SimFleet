@@ -26,8 +26,8 @@ export default function App() {
     <main>
       <header><div><p className="eyebrow">SIMULATION OPERATIONS</p><h1>SimFleet</h1></div><span className="window">{window?.start?.slice(0, 10) || (error ? "Unavailable" : "Loading")}</span></header>
       {error && <p role="alert">{error}</p>}
-      <section class="grid"><VersionCompare rows={data.passRates} regressions={data.regressions} /><ScenarioDetail /></section>
-      <section class="grid"><FlakyList rows={data.flaky} /><BatchHealth rows={data.batches} /></section>
+      <section className="grid"><VersionCompare rows={data.passRates} regressions={data.regressions} /><ScenarioDetail /></section>
+      <section className="grid"><FlakyList rows={data.flaky} /><BatchHealth rows={data.batches} /></section>
     </main>
   );
 }

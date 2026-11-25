@@ -46,6 +46,8 @@ npm --prefix frontend test
 
 ## Azure deployment
 
+Current deployment mode is a public demo: the dashboard and its same-origin API proxy are publicly accessible, and Entra sign-in is deferred. The deployed dashboard data is synthetic demo data. Do not load real DriveBench results or personal, confidential, or otherwise sensitive data into this deployment. This demo is not production-ready; see [Production Readiness](docs/production-readiness.md) for the remaining controls and blockers.
+
 GitHub Actions deploys on pushes to `main` or by manual workflow dispatch. This Azure for Students subscription currently permits North Central US and exposes Container Apps Express environments, which do not support ACA Jobs. The deployed worker is therefore a single-replica polling Container App; the Bicep Job design is not used in this subscription. Configure repository variables:
 
 - `AZURE_RESOURCE_GROUP`
