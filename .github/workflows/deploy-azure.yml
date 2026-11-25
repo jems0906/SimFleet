@@ -61,7 +61,7 @@ jobs:
           check_setting AZURE_SUBSCRIPTION_ID "$AZURE_SUBSCRIPTION_ID"
           check_setting POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
           check_setting SIMFLEET_API_KEY "$API_KEY"
-          if [ -n "$ENTRA_CLIENT_ID$ENTRA_TENANT_ID$ENTRA_CLIENT_SECRET" ] || [ "$ENTRA_ALLOWED_USER_IDS" != '[]' ]; then
+          if [ -n "$ENTRA_CLIENT_ID" ] || [ "$ENTRA_ALLOWED_USER_IDS" != '[]' ]; then
             check_setting ENTRA_CLIENT_ID "$ENTRA_CLIENT_ID"
             check_setting ENTRA_TENANT_ID "$ENTRA_TENANT_ID"
             check_setting ENTRA_CLIENT_SECRET "$ENTRA_CLIENT_SECRET"
@@ -123,6 +123,10 @@ jobs:
         shell: bash
         run: |
           ACR_SERVER=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
+          if [ -z "$ENTRA_CLIENT_ID" ]; then
+            ENTRA_TENANT_ID=''
+            ENTRA_CLIENT_SECRET=''
+          fi
           AUTH_ENABLED=$(az containerapp auth show --name simfleet-dashboard --resource-group "$AZURE_RESOURCE_GROUP" --query platform.enabled -o tsv 2>/dev/null || true)
           if [ "$AUTH_ENABLED" = 'true' ] && [ -z "$ENTRA_CLIENT_ID" ]; then
             echo 'Refusing to remove Entra settings from an authentication-enabled dashboard.'
